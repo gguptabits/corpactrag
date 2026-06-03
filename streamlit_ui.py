@@ -1,6 +1,6 @@
 import os
 # CRITICAL: Force the pure Python Protobuf implementation to bypass binary descriptor conflicts on Streamlit Cloud
-os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
+# os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 
 import tempfile
 import streamlit as st
