@@ -23,6 +23,10 @@ class FinanceRAGService:
         self.persist_directory = persist_directory
         self.credentials_file = credentials_file
         
+        # Ensure the persistence directory for Chroma DB exists
+        if not os.path.exists(self.persist_directory):
+            os.makedirs(self.persist_directory, exist_ok=True)
+        
         # 1. Initialize Embeddings (HuggingFace)
         self.embeddings = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2"
