@@ -10,3 +10,4 @@ requests>=2.32.2
 torch>=2.0.0
 torchvision>=0.15.0
 protobuf==4.25.3
+openai>=2.52.0
