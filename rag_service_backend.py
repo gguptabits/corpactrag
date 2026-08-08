@@ -2,6 +2,7 @@ import os
 import requests
 import json
 import hashlib
+import chromadb
 from dotenv import load_dotenv
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -13,6 +14,140 @@ from langchain_core.output_parsers import StrOutputParser
 
 # Load environment variables from .env
 load_dotenv()
+
+
+# Load environment variables from .env
+load_dotenv()
+
+class AdaptiveFinanceRAGService:
+    def __init__(self, db_path="./chroma_db"):
+        self.hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
+        if not self.hf_token:
+            raise ValueError("Please set HUGGINGFACEHUB_API_TOKEN in the .env file")
+            
+        # 1. Initialize HuggingFace Embeddings
+        self.embeddings = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        )
+        
+        # 2. Initialize ChromaDB Client & Collections
+        self.chroma_client = chromadb.PersistentClient(path=db_path)
+        
+        # Knowledge Base Collection (Static Documents)
+        self.doc_collection = self.chroma_client.get_or_create_collection("finance_docs")
+        
+        # Adaptive Feedback Store (Dynamic Memory)
+        self.feedback_collection = self.chroma_client.get_or_create_collection("user_feedback")
+
+        # 3. Initialize Chat Model using Qwen 2.5 (High Performance, Non-Gated, Conversational-native)
+        repo_id = "Qwen/Qwen2.5-7B-Instruct"
+        
+        self.llm_endpoint = HuggingFaceEndpoint(
+            repo_id=repo_id,
+            max_new_tokens=512,
+            temperature=0.3,
+            huggingfacehub_api_token=self.hf_token
+        )
+        
+        # Wrap with ChatHuggingFace to satisfy "conversational" task requirements
+        self.chat_model = ChatHuggingFace(llm=self.llm_endpoint)
+
+        # 4. Define the Chat Prompt Template
+        self.system_prompt = (
+            "You are a precise corporate finance AI assistant. "
+            "Answer the question concisely in 2 to 3 sentences. "
+            "Follow the style and factual guidelines established in past user feedback if applicable.\n\n"
+            "Context Documents:\n{context}\n\n"
+            "{adaptive_examples}"
+        )
+        
+        self.prompt = ChatPromptTemplate.from_messages([
+            ("system", self.system_prompt),
+            ("human", "{input}"),
+        ])
+
+    def add_feedback(self, question: str, expected_answer: str, user_rating: int):
+        """
+        Stores user feedback and expected answers to adapt future responses.
+        Only stores positive corrections (e.g., rating >= 4 or explicit correction).
+        """
+        if user_rating >= 4:
+            # Replaced SentenceTransformer with HuggingFaceEmbeddings embed_query
+            embedding = self.embeddings.embed_query(question)
+            feedback_id = f"fb_{self.feedback_collection.count() + 1}"
+            
+            self.feedback_collection.add(
+                ids=[feedback_id],
+                embeddings=[embedding],
+                documents=[expected_answer],
+                metadatas=[{"question": question, "rating": user_rating}]
+            )
+            print(f" [Adaptive Memory] Saved feedback for query: '{question}'")
+
+    def retrieve_adaptive_examples(self, question: str, top_k: int = 2) -> str:
+        """Retrieves past similar user-corrected examples for dynamic few-shot learning."""
+        if self.feedback_collection.count() == 0:
+            return ""
+
+        query_embedding = self.embeddings.embed_query(question)
+        results = self.feedback_collection.query(
+            query_embeddings=[query_embedding],
+            n_results=min(top_k, self.feedback_collection.count())
+        )
+
+        few_shot_context = ""
+        if results and results["documents"] and results["documents"][0]:
+            few_shot_context += "\n--- LEARNING FROM PAST USER FEEDBACK & CORRECTIONS ---\n"
+            for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
+                few_shot_context += f"Past Question: {meta['question']}\nCorrect Response: {doc}\n\n"
+        return few_shot_context
+
+    def retrieve_documents(self, question: str, top_k: int = 3) -> str:
+        """Retrieves relevant background knowledge from ChromaDB."""
+        if self.doc_collection.count() == 0:
+            return "No documents available."
+
+        query_embedding = self.embeddings.embed_query(question)
+        results = self.doc_collection.query(
+            query_embeddings=[query_embedding],
+            n_results=min(top_k, self.doc_collection.count())
+        )
+        return "\n".join(results["documents"][0]) if results["documents"] else ""
+
+    def answer_query(self, question: str) -> str:
+        """Generates an answer using retrieved knowledge + adaptive memory and HuggingFace LLM."""
+        context = self.retrieve_documents(question)
+        adaptive_examples = self.retrieve_adaptive_examples(question)
+
+        # Construct the pipeline with LCEL
+        rag_chain = (
+            self.prompt
+            | self.chat_model
+            | StrOutputParser()
+        )
+        
+        # Execute the chain
+        return rag_chain.invoke({
+            "context": context,
+            "adaptive_examples": adaptive_examples,
+            "input": question
+        })
+
+    def refresh_vector_db(self) -> str:
+        """Clears all documents and feedback from the vector database by resetting collections."""
+        try:
+            # Delete existing collections to wipe data
+            self.chroma_client.delete_collection("finance_docs")
+            self.chroma_client.delete_collection("user_feedback")
+        except Exception as e:
+            print(f"Notice during wipe: {e}")
+            
+        # Re-initialize fresh collections
+        self.doc_collection = self.chroma_client.get_or_create_collection("finance_docs")
+        self.feedback_collection = self.chroma_client.get_or_create_collection("user_feedback")
+        
+        return "Vector database successfully refreshed and all prior memory cleared."
+
 
 class FinanceRAGService:
     def __init__(self, persist_directory="./chroma_db", credentials_file="user_credentials.json"):
@@ -155,11 +290,6 @@ class FinanceRAGService:
             return False, f"Server error saving credentials: {e}"
         
 
-import chromadb
-from sentence_transformers import SentenceTransformer
-import openai  # Or your preferred LLM provider / API
-
-class AdaptiveFinanceRAGService:
     def __init__(self, db_path="./chroma_db"):
         # 1. Initialize Embedding Model & ChromaDB Client
         self.encoder = SentenceTransformer("all-MiniLM-L6-v2")

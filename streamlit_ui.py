@@ -237,6 +237,29 @@ with st.sidebar:
             clean_q = q.split(". ", 1)[1] if ". " in q else q
             st.session_state.sample_query = clean_q
 
+    
+    # --- ADDED FEATURE: DATABASE MANAGEMENT ---
+    st.header("🗑️ Database Management")
+    st.caption("Clear all documents and adaptive memory")
+    
+    if st.button("Refresh Vector Database", use_container_width=True):
+        with st.spinner("Wiping collections and resetting memory..."):
+            try:
+                if hasattr(st.session_state.rag_service, "refresh_vector_db"):
+                    success_msg = st.session_state.rag_service.refresh_vector_db()
+                    
+                    # Clear chat memory since the knowledge base is now empty
+                    st.session_state.messages = []
+                    st.session_state.feedback_submitted = set()
+                    
+                    st.success(f"✅ {success_msg}")
+                else:
+                    st.error("Backend does not support vector database refreshing.")
+            except Exception as e:
+                st.error(f"Error refreshing database: {e}")
+
+    st.divider()
+    
 # ==========================================
 # 6. Main Chat Area
 # ==========================================
@@ -257,6 +280,7 @@ if not st.session_state.messages:
     4. **🎯 Adaptive ML Training**: Rate generated responses and submit target corrections to continuously adapt vector memory accuracy over time.
     """)
     st.divider()
+
 
 # Display Chat History
 for msg_idx, message in enumerate(st.session_state.messages):
